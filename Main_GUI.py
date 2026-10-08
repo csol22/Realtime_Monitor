@@ -529,4 +529,3 @@ def main() -> None:
 if __name__ == "__main__":
 	main()
 
-	# I am now testing to see if sync function is working 
