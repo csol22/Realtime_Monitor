@@ -1,0 +1,102 @@
+{
+  "P31 100% Pump Test": {
+    "primary": {
+      "min": 1200.0,
+      "max": 1780.0
+    },
+    "secondary": {
+      "min": 1450.0,
+      "max": 2200.0
+    }
+  },
+  "P41 100% Pump Test": {
+    "primary": {
+      "min": 1250.0,
+      "max": 1825.0
+    },
+    "secondary": {
+      "min": 1380.0,
+      "max": 2300.0
+    }
+  },
+  "Combine 25% Pump Test": {
+    "primary": {
+      "min": 325.0,
+      "max": 575.0
+    },
+    "secondary": {
+      "min": 475.0,
+      "max": 650.0
+    }
+  },
+  "Combine 50% Pump Test": {
+    "primary": {
+      "min": 875.0,
+      "max": 1350.0
+    },
+    "secondary": {
+      "min": 1000.0,
+      "max": 1600.0
+    }
+  },
+  "Combine 75% Pump Test": {
+    "primary": {
+      "min": 1350.0,
+      "max": 2150.0
+    },
+    "secondary": {
+      "min": 1700.0,
+      "max": 2344.0
+    }
+  },
+  "Combine 100% Pump Test": {
+    "primary": {
+      "min": 1625.0,
+      "max": 2344.0
+    },
+    "secondary": {
+      "min": 1995.0,
+      "max": 2344.0
+    }
+  },
+  "15DP Test": {
+    "primary": {
+      "min": 1090.0,
+      "max": 1650.0
+    },
+    "secondary": {
+      "min": 1250.0,
+      "max": 2100.0
+    }
+  },
+  "20DP Test": {
+    "primary": {
+      "min": 1227.0,
+      "max": 1975.0
+    },
+    "secondary": {
+      "min": 1549.0,
+      "max": 2344.0
+    }
+  },
+  "25DP Test": {
+    "primary": {
+      "min": 1350.0,
+      "max": 2300.0
+    },
+    "secondary": {
+      "min": 1650.0,
+      "max": 2344.0
+    }
+  },
+  "30DP Test": {
+    "primary": {
+      "min": 1450.0,
+      "max": 2344.0
+    },
+    "secondary": {
+      "min": 1821.0,
+      "max": 2344.0
+    }
+  }
+}
