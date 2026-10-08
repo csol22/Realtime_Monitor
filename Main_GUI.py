@@ -337,7 +337,9 @@ class RealtimeFlowMonitor:
 			criteria = load_passing_criteria()
 		except (OSError, ValueError) as error:
 			messagebox.showerror(
-				"Passing Criteria Error", str(error), parent=self.settings_window.window
+				"Passing Criteria Error",
+				str(error),
+				parent=self.settings_window.window if self.settings_window is not None else self.root,
 			)
 			return
 
