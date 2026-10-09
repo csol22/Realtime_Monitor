@@ -188,11 +188,17 @@ class FlowChart:
 		samples: list[FlowSample],
 		point: Callable[[float, float | None], tuple[float, float]],
 	) -> None:
-		for index in range(1, len(samples)):
-			previous, current = samples[index - 1], samples[index]
+		if not samples:
+			return
+
+		coords: list[float] = []
+		for sample in samples:
+			x, y = point(max(0.0, sample.runtime), getattr(sample, self.flow_name))
+			coords.extend((x, y))
+
+		if len(coords) >= 4:
 			self.canvas.create_line(
-				*point(max(0.0, previous.runtime), getattr(previous, self.flow_name)),
-				*point(max(0.0, current.runtime), getattr(current, self.flow_name)),
+				*coords,
 				fill=self.color,
 				width=2,
 				dash=self.dash,

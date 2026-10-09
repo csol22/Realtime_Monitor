@@ -4,7 +4,7 @@ import subprocess
 import tkinter as tk
 from pathlib import Path
 from tkinter import messagebox, ttk
-from typing import Callable
+from typing import Any, Callable
 
 if __package__:
 	from .monitor_config import TEST_MODES
@@ -12,7 +12,7 @@ else:
 	from monitor_config import TEST_MODES
 
 Criteria = dict[str, dict[str, dict[str, float]]]
-ChartSettings = dict[str, bool]
+ChartSettings = dict[str, Any]
 CRITERIA_FILE = Path(__file__).with_name("passing_criteria.json")
 SETTINGS_FILE = Path(__file__).with_name("monitor_settings.json")
 
@@ -113,6 +113,15 @@ def default_chart_settings() -> ChartSettings:
 		"show_secondary_chart": True,
 		"center_latest_curve": False,
 		"dark_theme": False,
+		"flow_poll_interval_ms": 50,
+		"pump_poll_interval_ms": 1000,
+		"contiguous_batch_read": True,
+		"tcp_nodelay": True,
+		"modbus_timeout_s": 1.0,
+		"modbus_retries": 0,
+		"modbus_slave_id": 1,
+		"modbus_port": 502,
+		"sync_chart_with_flow": True,
 	}
 
 
@@ -121,11 +130,48 @@ def _validate_chart_settings(data: object) -> ChartSettings:
 		raise ValueError("Chart settings JSON must contain an object.")
 	defaults = default_chart_settings()
 	settings: ChartSettings = {}
-	for key, default in defaults.items():
-		value = data.get(key, default)
+
+	# Booleans
+	for key in (
+		"show_primary_chart",
+		"show_secondary_chart",
+		"center_latest_curve",
+		"dark_theme",
+		"contiguous_batch_read",
+		"tcp_nodelay",
+		"sync_chart_with_flow",
+	):
+		value = data.get(key, defaults[key])
 		if not isinstance(value, bool):
 			raise ValueError(f"Chart setting '{key}' must be true or false.")
 		settings[key] = value
+
+	# Integers
+	int_ranges = {
+		"flow_poll_interval_ms": (10, 10000),
+		"pump_poll_interval_ms": (50, 60000),
+		"modbus_retries": (0, 10),
+		"modbus_slave_id": (1, 247),
+		"modbus_port": (1, 65535),
+	}
+	for key, (min_val, max_val) in int_ranges.items():
+		raw = data.get(key, defaults[key])
+		if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+			raise ValueError(f"Chart setting '{key}' must be an integer.")
+		val = int(raw)
+		if not (min_val <= val <= max_val):
+			raise ValueError(f"Chart setting '{key}' must be between {min_val} and {max_val}.")
+		settings[key] = val
+
+	# Timeout (float)
+	raw_timeout = data.get("modbus_timeout_s", defaults["modbus_timeout_s"])
+	if isinstance(raw_timeout, bool) or not isinstance(raw_timeout, (int, float)):
+		raise ValueError("Chart setting 'modbus_timeout_s' must be a number.")
+	timeout = float(raw_timeout)
+	if not (0.05 <= timeout <= 30.0):
+		raise ValueError("Chart setting 'modbus_timeout_s' must be between 0.05 and 30.0.")
+	settings["modbus_timeout_s"] = timeout
+
 	return settings
 
 
@@ -160,20 +206,24 @@ class AdvancedSettingsWindow:
 	) -> None:
 		self.window = tk.Toplevel(parent)
 		self.window.title("Advanced Settings")
-		self.window.geometry("560x360")
-		self.window.minsize(480, 300)
+		self.window.geometry("600x530")
+		self.window.minsize(540, 480)
 
 		self.settings = settings
 		self.on_save = on_save
 		self.on_reload_criteria = on_reload_criteria
 
-		is_dark = self.settings.get("dark_theme", False)
-		bg = "#202020" if is_dark else "#f3f3f3"
+		self.is_dark = self.settings.get("dark_theme", False)
+		bg = "#202020" if self.is_dark else "#f3f3f3"
 		self.window.configure(background=bg)
-		update_window_titlebar(self.window, is_dark)
+		update_window_titlebar(self.window, self.is_dark)
 
 		self.notebook = ttk.Notebook(self.window)
 		self.notebook.pack(fill="both", expand=True, padx=10, pady=(10, 0))
+
+		self.modbus_tab = ttk.Frame(self.notebook, padding=12)
+		self.notebook.add(self.modbus_tab, text="Modbus")
+		self._build_modbus_tab()
 
 		self.chart_style_tab = ttk.Frame(self.notebook, padding=14)
 		self.notebook.add(self.chart_style_tab, text="Chart Style")
@@ -187,6 +237,127 @@ class AdvancedSettingsWindow:
 		actions.pack(fill="x")
 		ttk.Button(actions, text="Save", command=self._save).pack(side="right", padx=(6, 0))
 		ttk.Button(actions, text="Close", command=self.window.destroy).pack(side="right")
+
+	def _build_modbus_tab(self) -> None:
+		self.modbus_tab.columnconfigure(0, weight=1)
+
+		# --- Scan Rates ---
+		scan_frame = ttk.LabelFrame(self.modbus_tab, text="Register Scan Rates", padding=10)
+		scan_frame.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+		scan_frame.columnconfigure(1, weight=1)
+
+		ttk.Label(scan_frame, text="Flow meter registers (FT01/FT61 - 37/38):").grid(row=0, column=0, sticky="w", pady=3)
+		self.flow_interval_var = tk.StringVar(
+			value=f"{self.settings.get('flow_poll_interval_ms', 50)} ms"
+		)
+		flow_cb = ttk.Combobox(
+			scan_frame,
+			textvariable=self.flow_interval_var,
+			values=["20 ms", "50 ms", "100 ms", "200 ms", "500 ms", "1000 ms"],
+			width=12,
+		)
+		flow_cb.grid(row=0, column=1, sticky="w", padx=(10, 0), pady=3)
+
+		ttk.Label(scan_frame, text="Pump / other registers (P31/P41 - 39/40):").grid(row=1, column=0, sticky="w", pady=3)
+		self.pump_interval_var = tk.StringVar(
+			value=f"{self.settings.get('pump_poll_interval_ms', 1000)} ms"
+		)
+		pump_cb = ttk.Combobox(
+			scan_frame,
+			textvariable=self.pump_interval_var,
+			values=["200 ms", "500 ms", "1000 ms", "2000 ms", "5000 ms"],
+			width=12,
+		)
+		pump_cb.grid(row=1, column=1, sticky="w", padx=(10, 0), pady=3)
+
+		muted_fg = "#888888" if self.is_dark else "#555555"
+		ttk.Label(
+			scan_frame,
+			text="Tip: 50 ms for flow keeps the chart smooth; 1000 ms for pump/other reduces bus load significantly.",
+			font=("Segoe UI", 8),
+			foreground=muted_fg,
+		).grid(row=2, column=0, columnspan=2, sticky="w", pady=(4, 0))
+
+		# --- Optimization & Sync ---
+		opt_frame = ttk.LabelFrame(self.modbus_tab, text="Optimization & Sync", padding=10)
+		opt_frame.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+		opt_frame.columnconfigure(0, weight=1)
+
+		self.sync_chart_var = tk.BooleanVar(value=self.settings.get("sync_chart_with_flow", True))
+		ttk.Checkbutton(
+			opt_frame,
+			text="Lockstep UI Refresh (sync chart and value display on every sample)",
+			variable=self.sync_chart_var,
+		).grid(row=0, column=0, sticky="w", pady=1)
+		ttk.Label(
+			opt_frame,
+			text="Redraws the chart and numeric values in the same frame as each incoming sample, eliminating visible lag.",
+			font=("Segoe UI", 8),
+			foreground=muted_fg,
+			wraplength=480,
+		).grid(row=1, column=0, sticky="w", padx=(20, 0), pady=(0, 4))
+
+		self.contiguous_batch_var = tk.BooleanVar(value=self.settings.get("contiguous_batch_read", True))
+		ttk.Checkbutton(
+			opt_frame,
+			text="Contiguous Batch Read (merge registers 37-40 into one request)",
+			variable=self.contiguous_batch_var,
+		).grid(row=2, column=0, sticky="w", pady=1)
+		ttk.Label(
+			opt_frame,
+			text="When flow and pump share the same scan tick, reads all four registers in a single Modbus request, halving RTT.",
+			font=("Segoe UI", 8),
+			foreground=muted_fg,
+			wraplength=480,
+		).grid(row=3, column=0, sticky="w", padx=(20, 0), pady=(0, 4))
+
+		self.tcp_nodelay_var = tk.BooleanVar(value=self.settings.get("tcp_nodelay", True))
+		ttk.Checkbutton(
+			opt_frame,
+			text="Enable TCP_NODELAY (low-latency socket mode)",
+			variable=self.tcp_nodelay_var,
+		).grid(row=4, column=0, sticky="w", pady=1)
+		ttk.Label(
+			opt_frame,
+			text="Disables Nagle's algorithm so small Modbus packets are sent immediately, critical for 50 ms polling.",
+			font=("Segoe UI", 8),
+			foreground=muted_fg,
+			wraplength=480,
+		).grid(row=5, column=0, sticky="w", padx=(20, 0), pady=(0, 2))
+
+		# --- Connection Parameters ---
+		comm_frame = ttk.LabelFrame(self.modbus_tab, text="Connection Parameters", padding=10)
+		comm_frame.grid(row=2, column=0, sticky="ew")
+		comm_frame.columnconfigure(1, weight=1)
+		comm_frame.columnconfigure(3, weight=1)
+
+		ttk.Label(comm_frame, text="Timeout:").grid(row=0, column=0, sticky="w", pady=3)
+		self.timeout_var = tk.StringVar(value=f"{self.settings.get('modbus_timeout_s', 1.0)} s")
+		ttk.Combobox(
+			comm_frame,
+			textvariable=self.timeout_var,
+			values=["0.2 s", "0.5 s", "1.0 s", "1.5 s", "2.0 s"],
+			width=8,
+		).grid(row=0, column=1, sticky="w", padx=(6, 14), pady=3)
+
+		ttk.Label(comm_frame, text="Retries:").grid(row=0, column=2, sticky="w", pady=3)
+		self.retries_var = tk.StringVar(value=str(self.settings.get("modbus_retries", 0)))
+		ttk.Combobox(
+			comm_frame,
+			textvariable=self.retries_var,
+			values=["0", "1", "2", "3"],
+			width=6,
+		).grid(row=0, column=3, sticky="w", padx=(6, 0), pady=3)
+
+		ttk.Label(comm_frame, text="Slave ID:").grid(row=1, column=0, sticky="w", pady=3)
+		self.slave_id_entry = ttk.Entry(comm_frame, width=8)
+		self.slave_id_entry.insert(0, str(self.settings.get("modbus_slave_id", 1)))
+		self.slave_id_entry.grid(row=1, column=1, sticky="w", padx=(6, 14), pady=3)
+
+		ttk.Label(comm_frame, text="Port:").grid(row=1, column=2, sticky="w", pady=3)
+		self.port_entry = ttk.Entry(comm_frame, width=8)
+		self.port_entry.insert(0, str(self.settings.get("modbus_port", 502)))
+		self.port_entry.grid(row=1, column=3, sticky="w", padx=(6, 0), pady=3)
 
 	def _build_chart_style_tab(self) -> None:
 		self.chart_style_tab.columnconfigure(0, weight=1)
@@ -240,7 +411,7 @@ class AdvancedSettingsWindow:
 		self.ui_config_tab.columnconfigure(0, weight=1)
 
 		theme_frame = ttk.LabelFrame(
-			self.ui_config_tab, text="Theme / 界面主题", padding=14
+			self.ui_config_tab, text="Theme", padding=14
 		)
 		theme_frame.grid(row=0, column=0, sticky="ew", pady=(0, 12))
 		theme_frame.columnconfigure(0, weight=1)
@@ -256,14 +427,14 @@ class AdvancedSettingsWindow:
 
 		ttk.Radiobutton(
 			theme_frame,
-			text="Light Theme / 白色主题 (Default)",
+			text="Light Theme (Default)",
 			variable=self.dark_theme_var,
 			value=False,
 		).grid(row=1, column=0, sticky="w", pady=6)
 
 		ttk.Radiobutton(
 			theme_frame,
-			text="Dark Theme / 深色主题 (Windows Dark Style)",
+			text="Dark Theme (Windows Dark Style)",
 			variable=self.dark_theme_var,
 			value=True,
 		).grid(row=2, column=0, sticky="w", pady=6)
@@ -280,11 +451,68 @@ class AdvancedSettingsWindow:
 			messagebox.showerror("Could Not Open JSON", str(error), parent=self.window)
 
 	def _save(self) -> None:
+		try:
+			flow_ms = int(self.flow_interval_var.get().replace("ms", "").strip())
+			if not (10 <= flow_ms <= 10000):
+				raise ValueError("Flow scan interval must be between 10 and 10000 ms.")
+		except ValueError as err:
+			messagebox.showerror("Invalid Input", f"Flow scan interval: {err}", parent=self.window)
+			return
+
+		try:
+			pump_ms = int(self.pump_interval_var.get().replace("ms", "").strip())
+			if not (50 <= pump_ms <= 60000):
+				raise ValueError("Pump/other scan interval must be between 50 and 60000 ms.")
+		except ValueError as err:
+			messagebox.showerror("Invalid Input", f"Pump/other scan interval: {err}", parent=self.window)
+			return
+
+		try:
+			timeout_s = float(self.timeout_var.get().replace("s", "").strip())
+			if not (0.05 <= timeout_s <= 30.0):
+				raise ValueError("Timeout must be between 0.05 and 30.0 s.")
+		except ValueError as err:
+			messagebox.showerror("Invalid Input", f"Timeout: {err}", parent=self.window)
+			return
+
+		try:
+			retries = int(self.retries_var.get().strip().split()[0])
+			if not (0 <= retries <= 10):
+				raise ValueError("Retries must be between 0 and 10.")
+		except ValueError as err:
+			messagebox.showerror("Invalid Input", f"Retries: {err}", parent=self.window)
+			return
+
+		try:
+			slave_id = int(self.slave_id_entry.get().strip())
+			if not (1 <= slave_id <= 247):
+				raise ValueError("Slave ID must be between 1 and 247.")
+		except ValueError as err:
+			messagebox.showerror("Invalid Input", f"Slave ID: {err}", parent=self.window)
+			return
+
+		try:
+			port = int(self.port_entry.get().strip())
+			if not (1 <= port <= 65535):
+				raise ValueError("Port must be between 1 and 65535.")
+		except ValueError as err:
+			messagebox.showerror("Invalid Input", f"Port: {err}", parent=self.window)
+			return
+
 		settings = {
 			"show_primary_chart": self.show_primary_var.get(),
 			"show_secondary_chart": self.show_secondary_var.get(),
 			"center_latest_curve": self.center_curve_var.get(),
 			"dark_theme": self.dark_theme_var.get(),
+			"flow_poll_interval_ms": flow_ms,
+			"pump_poll_interval_ms": pump_ms,
+			"contiguous_batch_read": self.contiguous_batch_var.get(),
+			"tcp_nodelay": self.tcp_nodelay_var.get(),
+			"sync_chart_with_flow": self.sync_chart_var.get(),
+			"modbus_timeout_s": timeout_s,
+			"modbus_retries": retries,
+			"modbus_slave_id": slave_id,
+			"modbus_port": port,
 		}
 		try:
 			save_chart_settings(settings)
@@ -293,10 +521,10 @@ class AdvancedSettingsWindow:
 			return
 
 		self.settings = settings
-		is_dark = settings["dark_theme"]
-		bg = "#202020" if is_dark else "#f3f3f3"
+		self.is_dark = settings["dark_theme"]
+		bg = "#202020" if self.is_dark else "#f3f3f3"
 		self.window.configure(background=bg)
-		update_window_titlebar(self.window, is_dark)
+		update_window_titlebar(self.window, self.is_dark)
 
 		self.on_save(settings)
 		messagebox.showinfo("Settings Saved", "Settings have been saved.", parent=self.window)

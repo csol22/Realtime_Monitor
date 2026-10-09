@@ -10,9 +10,7 @@ if __package__:
 	from .models import FlowSample
 	from .modbus_core import ModbusCore
 	from .monitor_config import (
-		DEFAULT_REFRESH_MS,
 		HISTORY_LIMIT,
-		REFRESH_INTERVALS,
 		TEST_MODES,
 	)
 	from .network_utils import get_default_modbus_ip
@@ -30,9 +28,7 @@ else:
 	from models import FlowSample
 	from modbus_core import ModbusCore
 	from monitor_config import (
-		DEFAULT_REFRESH_MS,
 		HISTORY_LIMIT,
-		REFRESH_INTERVALS,
 		TEST_MODES,
 	)
 	from network_utils import get_default_modbus_ip
@@ -162,7 +158,8 @@ class RealtimeFlowMonitor:
 		self.root = root
 		self.modbus = ModbusCore(client)
 		self.stop_event = threading.Event()
-		self.refresh_ms = DEFAULT_REFRESH_MS
+		self._flow_poll_tick: int = 0
+		self._pump_poll_tick: int = 0
 		self.samples: deque[FlowSample] = deque(maxlen=HISTORY_LIMIT)
 		self.criteria = criteria if criteria is not None else load_passing_criteria()
 		self.chart_settings = (
@@ -204,18 +201,8 @@ class RealtimeFlowMonitor:
 		ttk.Button(connection_frame, text="Obtain IP Address", command=self.obtain_ip_address).pack(
 			side="left", padx=4
 		)
-		ttk.Label(connection_frame, text="Refresh:").pack(side="left", padx=(14, 4))
-		self.refresh_selector = ttk.Combobox(
-			connection_frame,
-			width=8,
-			state="readonly",
-			values=[f"{interval} ms" for interval in REFRESH_INTERVALS],
-		)
-		self.refresh_selector.set(f"{DEFAULT_REFRESH_MS} ms")
-		self.refresh_selector.bind("<<ComboboxSelected>>", self._refresh_interval_changed)
-		self.refresh_selector.pack(side="left", padx=4)
 		ttk.Button(connection_frame, text="Settings", command=self.open_settings).pack(
-			side="left", padx=4
+			side="left", padx=(14, 4)
 		)
 		self.connection_status = ttk.Label(
 			connection_frame, text="Offline", foreground=self._status_color("offline")
@@ -309,6 +296,7 @@ class RealtimeFlowMonitor:
 		self.primary_chart.set_theme(self.is_dark)
 		self.secondary_chart.set_theme(self.is_dark)
 		self._apply_chart_settings()
+		self._apply_modbus_settings()
 		if self.samples:
 			self._accept_sample(self.samples[-1])
 
@@ -347,9 +335,17 @@ class RealtimeFlowMonitor:
 		if self.samples:
 			self._accept_sample(self.samples[-1])
 
-	def _refresh_interval_changed(self, _event) -> None:
-		del _event
-		self.refresh_ms = int(self.refresh_selector.get().split()[0])
+	def _apply_modbus_settings(self) -> None:
+		"""Push current chart_settings Modbus parameters into the ModbusCore instance."""
+		s = self.chart_settings
+		self.modbus.configure(
+			slave_id=s.get("modbus_slave_id", 1),
+			port=s.get("modbus_port", 502),
+			timeout=s.get("modbus_timeout_s", 1.0),
+			retries=s.get("modbus_retries", 0),
+			tcp_nodelay=s.get("tcp_nodelay", True),
+			contiguous_batch_read=s.get("contiguous_batch_read", True),
+		)
 
 	def obtain_ip_address(self) -> None:
 		self.default_ip = get_default_modbus_ip()
@@ -366,6 +362,7 @@ class RealtimeFlowMonitor:
 				text="Enter an IP address", foreground=self._status_color("error")
 			)
 			return
+		self._apply_modbus_settings()
 		self.connect_button.config(state="disabled")
 		self.connection_status.config(text="Connecting...", foreground=self._status_color("pending"))
 		threading.Thread(
@@ -382,6 +379,8 @@ class RealtimeFlowMonitor:
 	def _connected(self, ip_address: str) -> None:
 		self.start_time = time.time()
 		self.samples.clear()
+		self._flow_poll_tick = 0
+		self._pump_poll_tick = 0
 		self.connect_button.config(text="Disconnect", command=self.disconnect, state="normal")
 		self.connection_status.config(
 			text=f"Connected to {ip_address}", foreground=self._status_color("connected")
@@ -419,12 +418,38 @@ class RealtimeFlowMonitor:
 		threading.Thread(target=self._poll_loop, daemon=True).start()
 
 	def _poll_loop(self) -> None:
+		"""Dual-rate polling loop: flow at flow_poll_interval_ms, pump at pump_poll_interval_ms."""
+		elapsed_ms: float = 0.0
 		while not self.stop_event.is_set():
 			t_start = time.perf_counter()
+
+			flow_ms: int = self.chart_settings.get("flow_poll_interval_ms", 50)
+			pump_ms: int = self.chart_settings.get("pump_poll_interval_ms", 1000)
+
+			self._flow_poll_tick += int(elapsed_ms)
+			self._pump_poll_tick += int(elapsed_ms)
+
+			read_flow = self._flow_poll_tick >= flow_ms
+			read_pump = self._pump_poll_tick >= pump_ms
+
+			if read_flow:
+				self._flow_poll_tick = 0
+			if read_pump:
+				self._pump_poll_tick = 0
+
 			try:
-				sample = self.modbus.read_sample(self.start_time)
+				sample = self.modbus.read_sample(
+					self.start_time,
+					read_flow=read_flow,
+					read_pump=read_pump,
+				)
 				if sample is not None:
-					self.root.after(0, self._accept_sample, sample)
+					sync = self.chart_settings.get("sync_chart_with_flow", True)
+					if sync and read_flow:
+						# Lockstep: redraw chart in the same UI frame as the value update
+						self.root.after(0, self._accept_sample_and_chart, sample)
+					else:
+						self.root.after(0, self._accept_sample, sample)
 					self.root.after(
 						0,
 						self.connection_status.config,
@@ -443,10 +468,17 @@ class RealtimeFlowMonitor:
 					{"text": f"Modbus error: {error}", "foreground": self._status_color("error")},
 				)
 
-			target_s = self.refresh_ms / 1000.0
+			# Sleep until next flow tick
 			elapsed = time.perf_counter() - t_start
-			sleep_time = max(0.001, target_s - elapsed)
-			self.stop_event.wait(sleep_time)
+			elapsed_ms = elapsed * 1000.0
+			sleep_s = max(0.001, (flow_ms / 1000.0) - elapsed)
+			self.stop_event.wait(sleep_s)
+			elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+
+	def _accept_sample_and_chart(self, sample: FlowSample) -> None:
+		"""Lockstep update: refresh numeric labels and chart in the same Tk callback."""
+		self._accept_sample(sample)
+		self._redraw_chart_once()
 
 	def _accept_sample(self, sample: FlowSample) -> None:
 		self.samples.append(sample)
@@ -478,8 +510,26 @@ class RealtimeFlowMonitor:
 			return "#3fb950" if min_flow <= flow <= max_flow else "#f85149"
 		return "#16a34a" if min_flow <= flow <= max_flow else "#dc2626"
 
-	def _redraw_chart(self) -> None:
+	def _redraw_chart_once(self) -> None:
+		"""Single non-scheduled chart redraw (called from lockstep callback)."""
 		if self.stop_event.is_set():
+			return
+		samples = list(self.samples)
+		test_name = self.test_selector.get()
+		center_curve = self.chart_settings["center_latest_curve"]
+		if self.chart_settings["show_primary_chart"]:
+			self.primary_chart.redraw(samples, test_name, self.criteria, center_curve)
+		if self.chart_settings["show_secondary_chart"]:
+			self.secondary_chart.redraw(samples, test_name, self.criteria, center_curve)
+
+	def _redraw_chart(self) -> None:
+		"""Periodic chart refresh used when lockstep sync is disabled."""
+		if self.stop_event.is_set():
+			return
+		# Skip periodic redraw if lockstep mode is on — charts already updated by _accept_sample_and_chart
+		if self.chart_settings.get("sync_chart_with_flow", True):
+			flow_ms: int = self.chart_settings.get("flow_poll_interval_ms", 50)
+			self.root.after(max(40, flow_ms), self._redraw_chart)
 			return
 		samples = list(self.samples)
 		test_name = self.test_selector.get()
@@ -487,18 +537,15 @@ class RealtimeFlowMonitor:
 		redraw_results = []
 		if self.chart_settings["show_primary_chart"]:
 			redraw_results.append(
-				self.primary_chart.redraw(
-					samples, test_name, self.criteria, center_curve
-				)
+				self.primary_chart.redraw(samples, test_name, self.criteria, center_curve)
 			)
 		if self.chart_settings["show_secondary_chart"]:
 			redraw_results.append(
-				self.secondary_chart.redraw(
-					samples, test_name, self.criteria, center_curve
-				)
+				self.secondary_chart.redraw(samples, test_name, self.criteria, center_curve)
 			)
 
-		redraw_interval = min(100, max(40, self.refresh_ms))
+		flow_ms = self.chart_settings.get("flow_poll_interval_ms", 50)
+		redraw_interval = min(200, max(40, flow_ms))
 		if redraw_results and not all(redraw_results):
 			self.root.after(max(30, redraw_interval // 2), self._redraw_chart)
 			return
