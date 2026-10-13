@@ -225,12 +225,12 @@ class RealtimeFlowMonitor:
         values_frame.pack(fill="x")
 
         self.primary_value = ttk.Label(
-            values_frame, text="Primary (FT61): -- g/m", font=("Segoe UI", 11, "bold")
+            values_frame, text="Primary (FT61): -- l/m", font=("Segoe UI", 11, "bold")
         )
         self.primary_value.pack(side="left", padx=(0, 24))
 
         self.secondary_value = ttk.Label(
-            values_frame, text="Secondary (FT01): -- g/m", font=("Segoe UI", 11, "bold")
+            values_frame, text="Secondary (FT01): -- l/m", font=("Segoe UI", 11, "bold")
         )
         self.secondary_value.pack(side="left", padx=(0, 24))
 
@@ -488,8 +488,8 @@ class RealtimeFlowMonitor:
     def _accept_sample(self, sample: FlowSample) -> None:
         self.samples.append(sample)
 
-        self.primary_value.config(text=f"Primary (FT61): {sample.primary_flow:.1f} g/m")
-        self.secondary_value.config(text=f"Secondary (FT01): {sample.secondary_flow:.1f} g/m")
+        self.primary_value.config(text=f"Primary (FT61): {sample.primary_flow:.1f} l/m")
+        self.secondary_value.config(text=f"Secondary (FT01): {sample.secondary_flow:.1f} l/m")
         self.pump_value.config(
             text=f"P31: {sample.pump31_speed:.1f}%   P41: {sample.pump41_speed:.1f}%"
         )
