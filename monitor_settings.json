@@ -2,7 +2,7 @@
   "show_primary_chart": true,
   "show_secondary_chart": true,
   "center_latest_curve": true,
-  "dark_theme": true,
+  "dark_theme": false,
   "contiguous_batch_read": true,
   "tcp_nodelay": true,
   "sync_chart_with_flow": true,
