@@ -197,11 +197,11 @@ class ModbusCore:
 		if self._supports_batch:
 			try:
 				try:
-					response = self._client.read_holding_registers(
-						address=start_address, count=count, slave=self.slave_id
+					response = self._client.read_holding_registers( # type: ignore
+						address=start_address, count=count, slave=self.slave_id # type: ignore
 					)
 				except TypeError:
-					response = self._client.read_holding_registers(
+					response = self._client.read_holding_registers( # type: ignore
 						address=start_address, count=count, device_id=self.slave_id
 					)
 
@@ -218,11 +218,11 @@ class ModbusCore:
 
 	def _read_single_register(self, address: int) -> int:
 		try:
-			response = self._client.read_holding_registers(
-				address=address, count=1, slave=self.slave_id
+			response = self._client.read_holding_registers( # type: ignore
+				address=address, count=1, slave=self.slave_id # pyright: ignore[reportCallIssue]
 			)
 		except TypeError:
-			response = self._client.read_holding_registers(
+			response = self._client.read_holding_registers( # type: ignore
 				address=address, count=1, device_id=self.slave_id
 			)
 
