@@ -2,10 +2,17 @@
   "show_primary_chart": true,
   "show_secondary_chart": true,
   "center_latest_curve": true,
-  "dark_theme": false,
+  "dark_theme": true,
   "contiguous_batch_read": true,
   "tcp_nodelay": true,
   "sync_chart_with_flow": true,
+  "overlay_enabled": true,
+  "overlay_registers": [
+    38,
+    37,
+    39,
+    40
+  ],
   "flow_poll_interval_ms": 200,
   "pump_poll_interval_ms": 200,
   "modbus_retries": 0,

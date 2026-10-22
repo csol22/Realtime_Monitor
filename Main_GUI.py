@@ -9,6 +9,7 @@ if __package__:
     from .chart_view import FlowChart
     from .models import FlowSample
     from .modbus_core import ModbusCore
+    from .overlay import FlowOverlay
     from .monitor_config import (
         HISTORY_LIMIT,
         TEST_MODES,
@@ -27,6 +28,7 @@ else:
     from chart_view import FlowChart
     from models import FlowSample
     from modbus_core import ModbusCore
+    from overlay import FlowOverlay
     from monitor_config import (
         HISTORY_LIMIT,
         TEST_MODES,
@@ -173,6 +175,8 @@ class RealtimeFlowMonitor:
         apply_theme(root, self.is_dark)
 
         self._build_ui()
+        self.overlay = FlowOverlay(root, self.is_dark)
+        self._configure_overlay()
         self._start_worker()
         
         # FIX: Force the chart to draw empty backgrounds immediately on boot 
@@ -293,9 +297,17 @@ class RealtimeFlowMonitor:
 
         self._apply_chart_settings()
         self._apply_modbus_settings()
+        self._configure_overlay()
 
         if self.samples:
             self._accept_sample(self.samples[-1])
+
+    def _configure_overlay(self) -> None:
+        self.overlay.configure_display(
+            enabled=self.chart_settings.get("overlay_enabled", False),
+            registers=self.chart_settings.get("overlay_registers", []),
+            is_dark=self.is_dark,
+        )
 
     def _apply_chart_settings(self) -> None:
         self.primary_chart.frame.grid_remove()
@@ -506,6 +518,17 @@ class RealtimeFlowMonitor:
             foreground=self._flow_color(
                 sample.secondary_flow, mode_criteria["secondary"]["min"], mode_criteria["secondary"]["max"],
             )
+        )
+        self.overlay.update_readings(
+            sample,
+            {
+                38: mode_criteria["primary"]["min"]
+                <= sample.primary_flow
+                <= mode_criteria["primary"]["max"],
+                37: mode_criteria["secondary"]["min"]
+                <= sample.secondary_flow
+                <= mode_criteria["secondary"]["max"],
+            },
         )
 
     def _flow_color(self, flow: float, min_flow: float, max_flow: float) -> str:

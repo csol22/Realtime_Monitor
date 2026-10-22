@@ -8,8 +8,10 @@ from typing import Any, Callable
 
 if __package__:
     from .monitor_config import TEST_MODES
+    from .overlay import OVERLAY_REGISTERS
 else:
     from monitor_config import TEST_MODES
+    from overlay import OVERLAY_REGISTERS
 
 Criteria = dict[str, dict[str, dict[str, float]]]
 ChartSettings = dict[str, Any]
@@ -127,6 +129,8 @@ def default_chart_settings() -> ChartSettings:
         "modbus_slave_id": 1,
         "modbus_port": 502,
         "sync_chart_with_flow": True,
+        "overlay_enabled": False,
+        "overlay_registers": [address for address, _, _, _ in OVERLAY_REGISTERS],
     }
 
 
@@ -146,11 +150,25 @@ def _validate_chart_settings(data: object) -> ChartSettings:
         "contiguous_batch_read",
         "tcp_nodelay",
         "sync_chart_with_flow",
+        "overlay_enabled",
     ):
         value = data.get(key, defaults[key])
         if not isinstance(value, bool):
             raise ValueError(f"Chart setting '{key}' must be true or false.")
         settings[key] = value
+
+    raw_registers = data.get("overlay_registers", defaults["overlay_registers"])
+    valid_registers = {address for address, _, _, _ in OVERLAY_REGISTERS}
+    if not isinstance(raw_registers, list):
+        raise ValueError("Chart setting 'overlay_registers' must be a list of addresses.")
+    if any(
+        isinstance(address, bool) or not isinstance(address, int) or address not in valid_registers
+        for address in raw_registers
+    ):
+        raise ValueError("Overlay registers must contain valid addresses from 37 to 40.")
+    if len(set(raw_registers)) != len(raw_registers):
+        raise ValueError("Overlay registers cannot contain duplicate addresses.")
+    settings["overlay_registers"] = list(raw_registers)
 
     # Integers
     int_ranges = {
@@ -251,6 +269,105 @@ class AdvancedSettingsWindow:
         self.ui_config_tab = ttk.Frame(self.notebook, padding=14)
         self.notebook.add(self.ui_config_tab, text="UI Configuration")
         self._build_ui_config_tab()
+
+        self.overlay_tab = ttk.Frame(self.notebook, padding=14)
+        self.notebook.add(self.overlay_tab, text="Overlay")
+        self._build_overlay_tab()
+
+    def _build_overlay_tab(self) -> None:
+        self.overlay_tab.columnconfigure(0, weight=1)
+
+        self.overlay_enabled_var = tk.BooleanVar(
+            value=self.settings.get("overlay_enabled", False)
+        )
+        ttk.Checkbutton(
+            self.overlay_tab,
+            text="Enable always-on-top overlay (top-right corner)",
+            variable=self.overlay_enabled_var,
+        ).grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+        ttk.Label(
+            self.overlay_tab,
+            text="Select the live Modbus registers to show. Select a row and use the arrows to change its display order.",
+            wraplength=500,
+        ).grid(row=1, column=0, sticky="w", pady=(0, 8))
+
+        table_frame = ttk.Frame(self.overlay_tab)
+        table_frame.grid(row=2, column=0, sticky="ew")
+        self.overlay_tree = ttk.Treeview(
+            table_frame,
+            columns=("include", "address", "name"),
+            show="headings",
+            height=len(OVERLAY_REGISTERS),
+            selectmode="browse",
+        )
+        self.overlay_tree.heading("include", text="Show")
+        self.overlay_tree.heading("address", text="Address")
+        self.overlay_tree.heading("name", text="Register")
+        self.overlay_tree.column("include", width=70, anchor="center", stretch=False)
+        self.overlay_tree.column("address", width=90, anchor="center", stretch=False)
+        self.overlay_tree.column("name", width=180, anchor="w")
+        self.overlay_tree.grid(row=0, column=0, sticky="ew")
+        table_frame.columnconfigure(0, weight=1)
+        self.overlay_tree.bind("<Button-1>", self._toggle_overlay_row)
+
+        controls = ttk.Frame(self.overlay_tab)
+        controls.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        ttk.Button(
+            controls, text="Toggle selection", command=self._toggle_selected_overlay_row
+        ).pack(side="left", padx=(0, 6))
+        ttk.Button(
+            controls, text="Move up", command=lambda: self._move_overlay_row(-1)
+        ).pack(side="left", padx=3)
+        ttk.Button(
+            controls, text="Move down", command=lambda: self._move_overlay_row(1)
+        ).pack(side="left", padx=3)
+
+        selected = self.settings.get(
+            "overlay_registers",
+            [address for address, _, _, _ in OVERLAY_REGISTERS],
+        )
+        ordered = list(selected) + [
+            address for address, _, _, _ in OVERLAY_REGISTERS if address not in selected
+        ]
+        names = {address: name for address, name, _, _ in OVERLAY_REGISTERS}
+        for address in ordered:
+            self.overlay_tree.insert(
+                "",
+                "end",
+                iid=str(address),
+                values=("☑" if address in selected else "☐", address, names[address]),
+            )
+
+    def _toggle_overlay_row(self, event: tk.Event) -> str | None:
+        row = self.overlay_tree.identify_row(event.y)
+        column = self.overlay_tree.identify_column(event.x)
+        if row and column == "#1":
+            self.overlay_tree.selection_set(row)
+            self._toggle_overlay_item(row)
+            return "break"
+        return None
+
+    def _toggle_selected_overlay_row(self) -> None:
+        selection = self.overlay_tree.selection()
+        if selection:
+            self._toggle_overlay_item(selection[0])
+
+    def _toggle_overlay_item(self, item: str) -> None:
+        values = list(self.overlay_tree.item(item, "values"))
+        values[0] = "☐" if values[0] == "☑" else "☑"
+        self.overlay_tree.item(item, values=values)
+
+    def _move_overlay_row(self, offset: int) -> None:
+        selection = self.overlay_tree.selection()
+        if not selection:
+            return
+        item = selection[0]
+        items = self.overlay_tree.get_children("")
+        target = items.index(item) + offset
+        if 0 <= target < len(items):
+            self.overlay_tree.move(item, "", target)
+            self.overlay_tree.selection_set(item)
 
     def _build_modbus_tab(self) -> None:
         self.modbus_tab.columnconfigure(0, weight=1)
@@ -503,6 +620,12 @@ class AdvancedSettingsWindow:
             "modbus_retries": retries,
             "modbus_slave_id": slave_id,
             "modbus_port": port,
+            "overlay_enabled": self.overlay_enabled_var.get(),
+            "overlay_registers": [
+                int(item)
+                for item in self.overlay_tree.get_children("")
+                if self.overlay_tree.item(item, "values")[0] == "☑"
+            ],
         }
 
         try:
