@@ -28,8 +28,11 @@ class PreviewClient:
 		values = {
 			37: round((120 + 30 * math.sin(phase)) * FLOW_SCALE),
 			38: round((115 + 40 * math.sin(phase + 1)) * FLOW_SCALE),
-			39: round((65 + 20 * math.sin(phase / 2)) * SPEED_SCALE),
-			40: round((55 + 25 * math.sin(phase / 2 + 1)) * SPEED_SCALE),
+			39: round(58 * SPEED_SCALE),
+			40: round(58 * SPEED_SCALE),
+			# Auto-mode detection registers (simulate ~15DP test scenario)
+			35: round(14.5 * 10),   # Actual Secondary DP ~14.5 psi
+			201: round(15.0 * 10),  # Secondary DP Setpoint = 15 psi
 		}
 		result = [values.get(address + i, 0) for i in range(count)]
 		return PreviewResponse(result)

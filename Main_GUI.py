@@ -6,14 +6,19 @@ from collections import deque
 from tkinter import messagebox, ttk
 
 if __package__:
+    from .auto_mode import AutoModeDetector
     from .chart_view import FlowChart
     from .models import FlowSample
     from .modbus_core import ModbusCore
+<<<<<<< HEAD
     from .overlay import FlowOverlay
     from .monitor_config import (
         HISTORY_LIMIT,
         TEST_MODES,
     )
+=======
+    from .monitor_config import HISTORY_LIMIT, TEST_MODES
+>>>>>>> bbc6a9aa64452c46768f07c22ed25f25a1066fcd
     from .network_utils import get_default_modbus_ip
     from .preview_client import PreviewClient
     from .test_confuguration import (
@@ -25,14 +30,19 @@ if __package__:
         update_window_titlebar,
     )
 else:
+    from auto_mode import AutoModeDetector
     from chart_view import FlowChart
     from models import FlowSample
     from modbus_core import ModbusCore
+<<<<<<< HEAD
     from overlay import FlowOverlay
     from monitor_config import (
         HISTORY_LIMIT,
         TEST_MODES,
     )
+=======
+    from monitor_config import HISTORY_LIMIT, TEST_MODES
+>>>>>>> bbc6a9aa64452c46768f07c22ed25f25a1066fcd
     from network_utils import get_default_modbus_ip
     from preview_client import PreviewClient
     from test_confuguration import (
@@ -43,6 +53,7 @@ else:
         load_passing_criteria,
         update_window_titlebar,
     )
+
 
 def apply_theme(root: tk.Tk, is_dark: bool) -> None:
     """Apply modern Windows-inspired theme (Light by default, or Dark) with unified titlebar."""
@@ -72,13 +83,9 @@ def apply_theme(root: tk.Tk, is_dark: bool) -> None:
     style.configure("TLabel", background=bg, foreground=text_primary)
     style.configure(
         "TButton",
-        background=panel_bg,
-        foreground=text_primary,
-        bordercolor=border_color,
-        lightcolor=border_color,
-        darkcolor=border_color,
-        focuscolor="none",
-        padding=(6, 2),
+        background=panel_bg, foreground=text_primary,
+        bordercolor=border_color, lightcolor=border_color, darkcolor=border_color,
+        focuscolor="none", padding=(6, 2),
     )
     style.map(
         "TButton",
@@ -94,43 +101,26 @@ def apply_theme(root: tk.Tk, is_dark: bool) -> None:
     )
     style.configure(
         "TCombobox",
-        fieldbackground=input_bg,
-        background=panel_bg,
-        foreground=text_primary,
-        selectbackground=accent,
-        selectforeground="#ffffff",
-        bordercolor=border_color,
-        arrowcolor=text_primary,
-        padding=2,
+        fieldbackground=input_bg, background=panel_bg, foreground=text_primary,
+        selectbackground=accent, selectforeground="#ffffff",
+        bordercolor=border_color, arrowcolor=text_primary, padding=2,
     )
     style.map(
         "TCombobox",
-        fieldbackground=[
-            ("readonly", input_bg),
-            ("active", "#353535" if is_dark else "#f9fafb"),
-        ],
+        fieldbackground=[("readonly", input_bg), ("active", "#353535" if is_dark else "#f9fafb")],
         selectbackground=[("readonly", accent)],
         foreground=[("readonly", text_primary)],
     )
     style.configure(
         "TEntry",
-        fieldbackground=input_bg,
-        foreground=text_primary,
-        bordercolor=border_color,
-        insertcolor=text_primary,
-        padding=2,
+        fieldbackground=input_bg, foreground=text_primary,
+        bordercolor=border_color, insertcolor=text_primary, padding=2,
     )
-    style.configure(
-        "TNotebook",
-        background=bg,
-        bordercolor=border_color,
-    )
+    style.configure("TNotebook", background=bg, bordercolor=border_color)
     style.configure(
         "TNotebook.Tab",
-        background=panel_bg,
-        foreground=text_primary,
-        padding=(10, 4),
-        bordercolor=border_color,
+        background=panel_bg, foreground=text_primary,
+        padding=(10, 4), bordercolor=border_color,
     )
     style.map(
         "TNotebook.Tab",
@@ -141,6 +131,7 @@ def apply_theme(root: tk.Tk, is_dark: bool) -> None:
     style.configure("TCheckbutton", background=bg, foreground=text_primary)
 
     update_window_titlebar(root, is_dark)
+
 
 class RealtimeFlowMonitor:
     def __init__(
@@ -153,8 +144,6 @@ class RealtimeFlowMonitor:
         self.root = root
         self.modbus = ModbusCore(client)
         self.stop_event = threading.Event()
-        self._flow_poll_tick: int = 0
-        self._pump_poll_tick: int = 0
 
         self.samples: deque[FlowSample] = deque(maxlen=HISTORY_LIMIT)
         self.criteria = criteria if criteria is not None else load_passing_criteria()
@@ -163,13 +152,18 @@ class RealtimeFlowMonitor:
         )
         self.is_dark = self.chart_settings.get("dark_theme", False)
         self.settings_window: AdvancedSettingsWindow | None = None
-
         self.default_ip = get_default_modbus_ip()
         self.start_time: float | None = None
 
+        # Automatic mode state
+        self._auto_mode_active: bool = False
+        self._auto_detector: AutoModeDetector = AutoModeDetector(
+            self.modbus, self._on_auto_mode_detected, self.root
+        )
+
         root.title("CHx2000 Realtime Flow Monitor")
         root.minsize(700, 320)
-        root.geometry("860x440")
+        root.geometry("860x460")
         root.protocol("WM_DELETE_WINDOW", self.close)
 
         apply_theme(root, self.is_dark)
@@ -178,10 +172,13 @@ class RealtimeFlowMonitor:
         self.overlay = FlowOverlay(root, self.is_dark)
         self._configure_overlay()
         self._start_worker()
-        
-        # FIX: Force the chart to draw empty backgrounds immediately on boot 
+
         self.root.after(100, self._redraw_chart_once)
         self.root.after(200, self._redraw_chart)
+
+    # ------------------------------------------------------------------
+    # Theme helpers
+    # ------------------------------------------------------------------
 
     def _status_color(self, status: str) -> str:
         if status == "connected":
@@ -190,7 +187,12 @@ class RealtimeFlowMonitor:
             return "#f85149" if self.is_dark else "#dc2626"
         return "#8e8e8e" if self.is_dark else "#6b7280"
 
+    # ------------------------------------------------------------------
+    # UI Construction
+    # ------------------------------------------------------------------
+
     def _build_ui(self) -> None:
+        # ---- Connection bar ----
         connection_frame = ttk.LabelFrame(self.root, text="Modbus TCP", padding=6)
         connection_frame.pack(fill="x", padx=8, pady=(6, 3))
 
@@ -214,6 +216,7 @@ class RealtimeFlowMonitor:
         )
         self.connection_status.pack(side="left", padx=12)
 
+        # ---- Test Mode Selection (with Automatic Mode) ----
         criteria_frame = ttk.LabelFrame(self.root, text="Test Mode Selection", padding=6)
         criteria_frame.pack(fill="x", padx=8, pady=3)
 
@@ -225,6 +228,29 @@ class RealtimeFlowMonitor:
         self.test_selector.bind("<<ComboboxSelected>>", self._on_test_selected)
         self.test_selector.pack(side="left", padx=4)
 
+        # Separator
+        ttk.Separator(criteria_frame, orient="vertical").pack(side="left", fill="y", padx=10)
+
+        # Automatic Mode checkbox
+        self._auto_mode_var = tk.BooleanVar(value=False)
+        self._auto_check = ttk.Checkbutton(
+            criteria_frame,
+            text="Automatic Mode",
+            variable=self._auto_mode_var,
+            command=self._on_auto_mode_toggled,
+        )
+        self._auto_check.pack(side="left", padx=(0, 6))
+
+        # Status label (shows "Automatic Mode Running" or "Idle")
+        self._auto_status_label = ttk.Label(
+            criteria_frame,
+            text="",
+            foreground=self._status_color("offline"),
+            font=("Segoe UI", 9, "italic"),
+        )
+        self._auto_status_label.pack(side="left", padx=4)
+
+        # ---- Live values ----
         values_frame = ttk.Frame(self.root, padding=(10, 4))
         values_frame.pack(fill="x")
 
@@ -243,6 +269,7 @@ class RealtimeFlowMonitor:
         )
         self.pump_value.pack(side="left")
 
+        # ---- Charts ----
         chart_frame = ttk.Frame(self.root, padding=(6, 2, 6, 6))
         self.chart_area = chart_frame
         self.chart_area.columnconfigure(0, weight=1)
@@ -263,11 +290,66 @@ class RealtimeFlowMonitor:
 
         self._apply_chart_settings()
 
-    def _on_test_selected(self, _event=None) -> None:
+    # ------------------------------------------------------------------
+    # Automatic Mode
+    # ------------------------------------------------------------------
+
+    def _on_auto_mode_toggled(self) -> None:
+        if self._auto_mode_var.get():
+            self._start_auto_mode()
+        else:
+            self._stop_auto_mode()
+
+    def _start_auto_mode(self) -> None:
+        self._auto_mode_active = True
+        self.test_selector.config(state="disabled")
+        self._auto_status_label.config(
+            text="Automatic Mode Running",
+            foreground="#0078d4",
+        )
+        self._auto_detector.reset()
+        self._auto_detector.start()
+
+    def _stop_auto_mode(self) -> None:
+        self._auto_mode_active = False
+        self._auto_detector.stop()
+        self.test_selector.config(state="readonly")
+        self._auto_status_label.config(
+            text="",
+            foreground=self._status_color("offline"),
+        )
+
+    def _on_auto_mode_detected(self, mode: str | None) -> None:
+        """Called on main thread whenever AutoModeDetector resolves a new mode."""
+        if not self._auto_mode_active:
+            return
+        if mode is not None and mode in TEST_MODES:
+            self.test_selector.set(mode)
+            self._auto_status_label.config(
+                text=f"Auto: {mode}",
+                foreground="#0078d4",
+            )
+        else:
+            self._auto_status_label.config(
+                text="Automatic Mode Running (idle)",
+                foreground=self._status_color("offline"),
+            )
+        # Re-evaluate pass/fail coloring with the new mode
         if self.samples:
             self._accept_sample(self.samples[-1])
-        # Re-draw the empty chart properly on test change if disconnected
+
+    def _on_test_selected(self, _event=None) -> None:
+        # Manual selection breaks automatic mode
+        if self._auto_mode_active:
+            self._auto_mode_var.set(False)
+            self._stop_auto_mode()
+        if self.samples:
+            self._accept_sample(self.samples[-1])
         self.root.after(0, self._redraw_chart_once)
+
+    # ------------------------------------------------------------------
+    # Settings
+    # ------------------------------------------------------------------
 
     def open_settings(self) -> None:
         if self.settings_window is not None:
@@ -296,8 +378,11 @@ class RealtimeFlowMonitor:
         self.secondary_chart.set_theme(self.is_dark)
 
         self._apply_chart_settings()
+<<<<<<< HEAD
         self._apply_modbus_settings()
         self._configure_overlay()
+=======
+>>>>>>> bbc6a9aa64452c46768f07c22ed25f25a1066fcd
 
         if self.samples:
             self._accept_sample(self.samples[-1])
@@ -329,8 +414,7 @@ class RealtimeFlowMonitor:
         else:
             self.chart_area.pack_forget()
             self.root.minsize(700, 180)
-            
-        # FIX: Ensure a redraw occurs right after layout changes
+
         self.root.after(50, self._redraw_chart_once)
 
     def _reload_passing_criteria(self) -> None:
@@ -348,17 +432,9 @@ class RealtimeFlowMonitor:
             self._accept_sample(self.samples[-1])
         self.root.after(0, self._redraw_chart_once)
 
-    def _apply_modbus_settings(self) -> None:
-        """Push current chart_settings Modbus parameters into the ModbusCore instance."""
-        s = self.chart_settings
-        self.modbus.configure(
-            slave_id=s.get("modbus_slave_id", 1),
-            port=s.get("modbus_port", 502),
-            timeout=s.get("modbus_timeout_s", 1.0),
-            retries=s.get("modbus_retries", 0),
-            tcp_nodelay=s.get("tcp_nodelay", True),
-            contiguous_batch_read=s.get("contiguous_batch_read", True),
-        )
+    # ------------------------------------------------------------------
+    # Connection
+    # ------------------------------------------------------------------
 
     def obtain_ip_address(self) -> None:
         self.default_ip = get_default_modbus_ip()
@@ -377,8 +453,6 @@ class RealtimeFlowMonitor:
             )
             return
 
-        self._apply_modbus_settings()
-
         self.connect_button.config(state="disabled")
         self.connection_status.config(text="Connecting...", foreground=self._status_color("pending"))
 
@@ -396,13 +470,16 @@ class RealtimeFlowMonitor:
     def _connected(self, ip_address: str) -> None:
         self.start_time = time.time()
         self.samples.clear()
-        self._flow_poll_tick = 0
-        self._pump_poll_tick = 0
 
         self.connect_button.config(text="Disconnect", command=self.disconnect, state="normal")
         self.connection_status.config(
             text=f"Connected to {ip_address}", foreground=self._status_color("connected")
         )
+
+        # If auto-mode was active, restart its detector now that Modbus is live
+        if self._auto_mode_active:
+            self._auto_detector.reset()
+            self._auto_detector.start()
 
     def _connection_failed(self, error: str) -> None:
         self.connect_button.config(text="Connect", command=self.connect, state="normal")
@@ -413,7 +490,6 @@ class RealtimeFlowMonitor:
     def disconnect(self) -> None:
         self.connect_button.config(state="disabled")
         self.connection_status.config(text="Disconnecting...", foreground=self._status_color("pending"))
-
         threading.Thread(target=self._disconnect_in_background, daemon=True).start()
 
     def _disconnect_in_background(self) -> None:
@@ -433,67 +509,55 @@ class RealtimeFlowMonitor:
             text=f"Disconnection failed: {error}", foreground=self._status_color("failed")
         )
 
+    # ------------------------------------------------------------------
+    # Poll loop (single-rate, driven by scan_interval_ms from settings)
+    # ------------------------------------------------------------------
+
     def _start_worker(self) -> None:
         threading.Thread(target=self._poll_loop, daemon=True).start()
 
     def _poll_loop(self) -> None:
-        """Dual-rate polling loop: flow at flow_poll_interval_ms, pump at pump_poll_interval_ms."""
-        elapsed_ms: float = 0.0
-
+        """Single-rate polling loop. Interval taken from chart_settings['scan_interval_ms']."""
         while not self.stop_event.is_set():
             t_start = time.perf_counter()
 
-            flow_ms: int = self.chart_settings.get("flow_poll_interval_ms", 50)
-            pump_ms: int = self.chart_settings.get("pump_poll_interval_ms", 1000)
-
-            self._flow_poll_tick += int(elapsed_ms)
-            self._pump_poll_tick += int(elapsed_ms)
-
-            read_flow = self._flow_poll_tick >= flow_ms
-            read_pump = self._pump_poll_tick >= pump_ms
-
-            if read_flow:
-                self._flow_poll_tick = 0
-            if read_pump:
-                self._pump_poll_tick = 0
+            scan_ms: int = self.chart_settings.get("scan_interval_ms", 50)
 
             try:
-                sample = self.modbus.read_sample(
-                    self.start_time, read_flow=read_flow, read_pump=read_pump,
-                )
+                sample = self.modbus.read_sample(self.start_time)
                 if sample is not None:
-                    sync = self.chart_settings.get("sync_chart_with_flow", True)
-                    if sync and read_flow:
-                        # Lockstep: redraw chart in the same UI frame as the value update
-                        self.root.after(0, self._accept_sample_and_chart, sample)
-                    else:
-                        self.root.after(0, self._accept_sample, sample)
-
-                    # 修复 1：添加 0 毫秒延迟，并使用 lambda 展开关键字参数
+                    self.root.after(0, self._accept_sample_and_chart, sample)
                     self.root.after(
-                        0, lambda: self.connection_status.config(text="Connected", foreground=self._status_color("connected"))
+                        0, lambda: self.connection_status.config(
+                            text="Connected",
+                            foreground=self._status_color("connected"),
+                        )
                     )
                 else:
-                    # 修复 2：处理 Offline 状态
                     self.root.after(
-                        0, lambda: self.connection_status.config(text="Offline", foreground=self._status_color("offline"))
+                        0, lambda: self.connection_status.config(
+                            text="Offline",
+                            foreground=self._status_color("offline"),
+                        )
                     )
             except Exception as error:
-                # 修复 3：处理 Error 状态
                 self.root.after(
-                    0, lambda err=error: self.connection_status.config(text=f"Modbus error: {err}", foreground=self._status_color("error"))
+                    0, lambda err=error: self.connection_status.config(
+                        text=f"Modbus error: {err}",
+                        foreground=self._status_color("error"),
+                    )
                 )
 
-            # Sleep until next flow tick
             elapsed = time.perf_counter() - t_start
-            elapsed_ms = elapsed * 1000.0
-            sleep_s = max(0.001, (flow_ms / 1000.0) - elapsed)
-
+            sleep_s = max(0.001, (scan_ms / 1000.0) - elapsed)
             self.stop_event.wait(sleep_s)
-            elapsed_ms = (time.perf_counter() - t_start) * 1000.0
+
+    # ------------------------------------------------------------------
+    # Sample processing
+    # ------------------------------------------------------------------
 
     def _accept_sample_and_chart(self, sample: FlowSample) -> None:
-        """Lockstep update: refresh numeric labels and chart in the same Tk callback."""
+        """Lockstep: update numeric labels and redraw chart in the same Tk frame."""
         self._accept_sample(sample)
         self._redraw_chart_once()
 
@@ -507,17 +571,24 @@ class RealtimeFlowMonitor:
         )
 
         test_name = self.test_selector.get()
-        mode_criteria = self.criteria[test_name]
+        mode_criteria = self.criteria.get(test_name, {})
 
-        self.primary_value.config(
-            foreground=self._flow_color(
-                sample.primary_flow, mode_criteria["primary"]["min"], mode_criteria["primary"]["max"],
+        if mode_criteria:
+            self.primary_value.config(
+                foreground=self._flow_color(
+                    sample.primary_flow,
+                    mode_criteria["primary"]["min"],
+                    mode_criteria["primary"]["max"],
+                )
             )
-        )
-        self.secondary_value.config(
-            foreground=self._flow_color(
-                sample.secondary_flow, mode_criteria["secondary"]["min"], mode_criteria["secondary"]["max"],
+            self.secondary_value.config(
+                foreground=self._flow_color(
+                    sample.secondary_flow,
+                    mode_criteria["secondary"]["min"],
+                    mode_criteria["secondary"]["max"],
+                )
             )
+<<<<<<< HEAD
         )
         self.overlay.update_readings(
             sample,
@@ -530,14 +601,20 @@ class RealtimeFlowMonitor:
                 <= mode_criteria["secondary"]["max"],
             },
         )
+=======
+>>>>>>> bbc6a9aa64452c46768f07c22ed25f25a1066fcd
 
     def _flow_color(self, flow: float, min_flow: float, max_flow: float) -> str:
         if self.is_dark:
             return "#3fb950" if min_flow <= flow <= max_flow else "#f85149"
         return "#16a34a" if min_flow <= flow <= max_flow else "#dc2626"
 
+    # ------------------------------------------------------------------
+    # Chart rendering
+    # ------------------------------------------------------------------
+
     def _redraw_chart_once(self) -> None:
-        """Single non-scheduled chart redraw (called from lockstep callback or layout updates)."""
+        """Single non-scheduled chart redraw."""
         if self.stop_event.is_set():
             return
 
@@ -551,40 +628,34 @@ class RealtimeFlowMonitor:
             self.secondary_chart.redraw(samples, test_name, self.criteria, center_curve)
 
     def _redraw_chart(self) -> None:
-        """Periodic chart refresh used when lockstep sync is disabled."""
+        """Periodic background chart refresh (fallback / safety net)."""
         if self.stop_event.is_set():
             return
 
-        # Skip periodic redraw if lockstep mode is on -> charts already updated by _accept_sample_and_chart
-        if self.chart_settings.get("sync_chart_with_flow", True):
-            flow_ms: int = self.chart_settings.get("flow_poll_interval_ms", 50)
-            self.root.after(max(40, flow_ms), self._redraw_chart)
-            return
+        scan_ms: int = self.chart_settings.get("scan_interval_ms", 50)
+        redraw_interval = min(200, max(40, scan_ms))
 
         samples = list(self.samples)
         test_name = self.test_selector.get()
         center_curve = self.chart_settings["center_latest_curve"]
 
-        redraw_results = []
+        results = []
         if self.chart_settings["show_primary_chart"]:
-            redraw_results.append(
-                self.primary_chart.redraw(samples, test_name, self.criteria, center_curve)
-            )
+            results.append(self.primary_chart.redraw(samples, test_name, self.criteria, center_curve))
         if self.chart_settings["show_secondary_chart"]:
-            redraw_results.append(
-                self.secondary_chart.redraw(samples, test_name, self.criteria, center_curve)
-            )
+            results.append(self.secondary_chart.redraw(samples, test_name, self.criteria, center_curve))
 
-        flow_ms = self.chart_settings.get("flow_poll_interval_ms", 50)
-        redraw_interval = min(200, max(40, flow_ms))
-
-        if redraw_results and not all(redraw_results):
+        if results and not all(results):
             self.root.after(max(30, redraw_interval // 2), self._redraw_chart)
             return
-
         self.root.after(redraw_interval, self._redraw_chart)
 
+    # ------------------------------------------------------------------
+    # Teardown
+    # ------------------------------------------------------------------
+
     def close(self) -> None:
+        self._auto_detector.stop()
         self.stop_event.set()
         self.modbus.disconnect()
         self.root.destroy()

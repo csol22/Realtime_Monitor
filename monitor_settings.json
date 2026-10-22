@@ -3,6 +3,7 @@
   "show_secondary_chart": true,
   "center_latest_curve": true,
   "dark_theme": true,
+<<<<<<< HEAD
   "contiguous_batch_read": true,
   "tcp_nodelay": true,
   "sync_chart_with_flow": true,
@@ -19,4 +20,7 @@
   "modbus_slave_id": 1,
   "modbus_port": 502,
   "modbus_timeout_s": 1.0
+=======
+  "scan_interval_ms": 50
+>>>>>>> bbc6a9aa64452c46768f07c22ed25f25a1066fcd
 }

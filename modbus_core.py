@@ -132,6 +132,22 @@ class ModbusCore:
 			if client is not None:
 				client.close()
 
+	def read_registers_raw(self, start_address: int, count: int) -> list[int] | None:
+		"""Read *count* holding registers starting at *start_address*.
+
+		Returns a list of raw unsigned integers, or ``None`` if not connected.
+		Raises on Modbus errors so callers can decide how to handle them.
+		"""
+		with self._client_lock:
+			if self._client is None:
+				return None
+			return self._read_registers(start_address, count)
+
+	@staticmethod
+	def signed(raw_value: int) -> int:
+		"""Convert a 16-bit unsigned register value to a signed integer."""
+		return raw_value - 65536 if raw_value > 32767 else raw_value
+
 	def read_sample(
 		self,
 		start_time: float | None,
