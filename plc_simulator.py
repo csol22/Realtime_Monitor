@@ -14,10 +14,30 @@ except ImportError as e:
     print(f"错误: pymodbus 缺失或版本不兼容（需要 >=3.15,<4）: {e}")
     exit(1)
 
+if __package__:
+    from .monitor_config import (
+        AUTO_MODE_DP_SETPOINT_REGISTER,
+        AUTO_MODE_DP_SETPOINT_SCALE,
+        AUTO_MODE_MANUAL_OVERRIDE_COIL,
+        AUTO_MODE_P31_REGISTER,
+        AUTO_MODE_P41_REGISTER,
+        AUTO_MODE_PUMP_SPEED_SCALE,
+    )
+else:
+    from monitor_config import (
+        AUTO_MODE_DP_SETPOINT_REGISTER,
+        AUTO_MODE_DP_SETPOINT_SCALE,
+        AUTO_MODE_MANUAL_OVERRIDE_COIL,
+        AUTO_MODE_P31_REGISTER,
+        AUTO_MODE_P41_REGISTER,
+        AUTO_MODE_PUMP_SPEED_SCALE,
+    )
+
 # 放大倍率（需与 Monitor 主程序中的比例保持一致）
 FLOW_SCALE = 100.0
 SPEED_SCALE = 1.0
 FLOW_SINE_PERIOD_S = 10.0
+
 
 class ModbusPLCSimulator:
     def __init__(self, root: tk.Tk):
@@ -25,8 +45,9 @@ class ModbusPLCSimulator:
         self.root.title("Modbus TCP PLC Simulator (Signal Generator)")
         self.root.geometry("540x620")
 
-        self.register_values = [0] * 202
+        self.register_values = [0] * (AUTO_MODE_P41_REGISTER + 1)
         self.register_values_lock = threading.Lock()
+        self._manual_override_enabled = False
         self._sine_start_time = time.monotonic()
         self._control_entries: list[tuple[ttk.Entry, tk.StringVar, tk.DoubleVar]] = []
         identity = ModbusDeviceIdentification()
@@ -35,13 +56,36 @@ class ModbusPLCSimulator:
         identity.ModelName = "PLC Simulator"
         self.device = SimDevice(
             id=1,
-            simdata=[
-                SimData(
-                    address=0,
-                    values=[0] * 202,
-                    datatype=DataType.REGISTERS,
-                )
-            ],
+            simdata=(
+                [
+                    SimData(
+                        address=AUTO_MODE_MANUAL_OVERRIDE_COIL,
+                        values=[False],
+                        datatype=DataType.BITS,
+                    )
+                ],
+                [
+                    SimData(
+                        address=0,
+                        values=[False],
+                        datatype=DataType.BITS,
+                    )
+                ],
+                [
+                    SimData(
+                        address=0,
+                        values=[0] * (AUTO_MODE_P41_REGISTER + 1),
+                        datatype=DataType.REGISTERS,
+                    )
+                ],
+                [
+                    SimData(
+                        address=0,
+                        values=[0],
+                        datatype=DataType.REGISTERS,
+                    )
+                ],
+            ),
             identity=identity,
             action=self._update_simulated_registers,
         )
@@ -54,6 +98,7 @@ class ModbusPLCSimulator:
         self.actual_dp_var = tk.DoubleVar(value=14.5)
         self.dp_setpoint_var = tk.DoubleVar(value=15.0)
         self.flow_sine_var = tk.BooleanVar(value=True)
+        self.manual_override_var = tk.BooleanVar(value=False)
 
         self._build_ui()
         self._sync_values_to_modbus()
@@ -63,7 +108,7 @@ class ModbusPLCSimulator:
     def _build_ui(self):
         frame = ttk.LabelFrame(
             self.root,
-            text="Manual Control Panel (Holding Registers 35, 37-40, 201)",
+            text="Manual Control Panel (Coil 753; Holding Registers 35, 37-40, 201, 752-753)",
             padding=15,
         )
         frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -75,6 +120,13 @@ class ModbusPLCSimulator:
             command=self._on_flow_sine_toggled,
         ).pack(anchor="w", pady=(0, 8))
 
+        ttk.Checkbutton(
+            frame,
+            text="Manual override (Coil 753)",
+            variable=self.manual_override_var,
+            command=self._on_manual_override_toggled,
+        ).pack(anchor="w", pady=(0, 8))
+
         self.primary_label = self._add_numeric_control(
             frame, "Primary Flow (FT61) target/peak [g/m]", self.primary_flow_var, 0, 200
         )
@@ -82,10 +134,12 @@ class ModbusPLCSimulator:
             frame, "Secondary Flow (FT01) target/peak [g/m]", self.secondary_flow_var, 0, 200
         )
         self.p31_label = self._add_numeric_control(
-            frame, "Pump 31 Speed (Register 39)", self.pump31_var, 0, 100
+            frame, f"Pump 31 Speed (Register {AUTO_MODE_P31_REGISTER})",
+            self.pump31_var, 0, 100
         )
         self.p41_label = self._add_numeric_control(
-            frame, "Pump 41 Speed (Register 40)", self.pump41_var, 0, 100
+            frame, f"Pump 41 Speed (Register {AUTO_MODE_P41_REGISTER})",
+            self.pump41_var, 0, 100
         )
         self.actual_dp_label = self._add_numeric_control(
             frame, "Actual Secondary DP (Register 35)", self.actual_dp_var, 0, 35
@@ -166,6 +220,10 @@ class ModbusPLCSimulator:
         self._update_labels()
         self._sync_values_to_modbus()
 
+    def _on_manual_override_toggled(self) -> None:
+        with self.register_values_lock:
+            self._manual_override_enabled = self.manual_override_var.get()
+
     def _flow_values(self) -> tuple[float, float]:
         primary = self.primary_flow_var.get()
         secondary = self.secondary_flow_var.get()
@@ -200,7 +258,15 @@ class ModbusPLCSimulator:
         with self.register_values_lock:
             self.register_values[35] = round(self.actual_dp_var.get() * FLOW_SCALE)
             self.register_values[37:41] = values
-            self.register_values[201] = round(self.dp_setpoint_var.get() * FLOW_SCALE)
+            self.register_values[AUTO_MODE_DP_SETPOINT_REGISTER] = round(
+                self.dp_setpoint_var.get() * AUTO_MODE_DP_SETPOINT_SCALE
+            )
+            self.register_values[AUTO_MODE_P31_REGISTER] = round(
+                self.pump31_var.get() * AUTO_MODE_PUMP_SPEED_SCALE
+            )
+            self.register_values[AUTO_MODE_P41_REGISTER] = round(
+                self.pump41_var.get() * AUTO_MODE_PUMP_SPEED_SCALE
+            )
 
     def _start_update_loop(self):
         self._sync_values_to_modbus()
@@ -216,12 +282,37 @@ class ModbusPLCSimulator:
         current_registers: list[int],
         set_values: list[int] | list[bool] | None,
     ) -> None:
+        if function_code == 1:
+            with self.register_values_lock:
+                if address <= AUTO_MODE_MANUAL_OVERRIDE_COIL < address + count:
+                    coil_register = AUTO_MODE_MANUAL_OVERRIDE_COIL // 16
+                    coil_offset = coil_register - start_address
+                    coil_mask = 1 << (AUTO_MODE_MANUAL_OVERRIDE_COIL % 16)
+                    if not 0 <= coil_offset < len(current_registers):
+                        raise RuntimeError(
+                            f"Coil {AUTO_MODE_MANUAL_OVERRIDE_COIL} is outside the simulator block"
+                        )
+                    if self._manual_override_enabled:
+                        current_registers[coil_offset] |= coil_mask
+                    else:
+                        current_registers[coil_offset] &= ~coil_mask
+            return
+
         if function_code not in (3, 23) or (
             set_values is not None and function_code != 23
         ):
             return
         with self.register_values_lock:
-            for register in (35, 37, 38, 39, 40, 201):
+            for register in (
+                35,
+                37,
+                38,
+                39,
+                40,
+                AUTO_MODE_DP_SETPOINT_REGISTER,
+                AUTO_MODE_P31_REGISTER,
+                AUTO_MODE_P41_REGISTER,
+            ):
                 offset = register - start_address
                 if address <= register < address + count and 0 <= offset < len(current_registers):
                     current_registers[offset] = self.register_values[register]
