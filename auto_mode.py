@@ -1,24 +1,13 @@
 """
 auto_mode.py  –  Automatic test-mode detection for CHx2000 Realtime Flow Monitor.
 
-Detection runs on a background thread every 3 seconds.
-Registers polled (in a single batch):
-    39  – P31 speed %   (SPEED_SCALE = 1)
-    40  – P41 speed %   (SPEED_SCALE = 1)
-    35  – Actual Secondary DP (raw / 10 → psi)
-   201  – Secondary DP Setpoint (raw / 10 → psi)
+Detection runs on a background thread every 2 seconds.
+Modbus addresses and scaling are centralized in monitor_config.py.
 
 Detection priority (first rule that matches wins):
-  1. P31 100% Pump Test   : P31 > 70, P41 == 0
-  2. P41 100% Pump Test   : P31 == 0, P41 > 70
-  3. 15DP Test  : P31 = 58±2, P41 = 58±2, actual_dp > setpoint-1, setpoint == 15
-  4. 20DP Test  : P31 = 68±2, P41 = 68±2, actual_dp > setpoint-1, setpoint == 20
-  5. 25DP Test  : P31 = 76±2, P41 = 76±2, actual_dp > setpoint-1, setpoint == 25
-  6. 30DP Test  : P31 = 83±2, P41 = 83±2, actual_dp > setpoint-1, setpoint == 30
-  7. Combine 25%  Pump Test: P31 = 25±1, P41 = 25±1
-  8. Combine 50%  Pump Test: P31 = 50±1, P41 = 50±1
-  9. Combine 75%  Pump Test: P31 = 75±1, P41 = 75±1
- 10. Combine 100% Pump Test: P31 = 90±1, P41 = 90±1
+  1. P31/P41 100% Pump Test: manual override enabled and one pump is at 100%, the other at 0%
+  2. DP Test: manual override disabled and DP setpoint is 15, 20, 25, or 30
+  3. Combine Pump Test: manual override enabled and both pumps have matching speeds
   –  else: None  (remain idle)
 """
 
@@ -28,56 +17,64 @@ import logging
 import threading
 from typing import Callable
 
-# Raw scale for DP registers (same as FLOW_SCALE pattern, divide by 10)
-_DP_SCALE = 100.0
-_SPEED_SCALE = 1.0
+if __package__:
+    from .monitor_config import (
+        AUTO_MODE_DETECTION_INTERVAL_S,
+        AUTO_MODE_DP_SETPOINT_REGISTER,
+        AUTO_MODE_DP_SETPOINT_SCALE,
+        AUTO_MODE_MANUAL_OVERRIDE_COIL,
+        AUTO_MODE_P31_REGISTER,
+        AUTO_MODE_P41_REGISTER,
+        AUTO_MODE_PUMP_SPEED_SCALE,
+    )
+else:
+    from monitor_config import (
+        AUTO_MODE_DETECTION_INTERVAL_S,
+        AUTO_MODE_DP_SETPOINT_REGISTER,
+        AUTO_MODE_DP_SETPOINT_SCALE,
+        AUTO_MODE_MANUAL_OVERRIDE_COIL,
+        AUTO_MODE_P31_REGISTER,
+        AUTO_MODE_P41_REGISTER,
+        AUTO_MODE_PUMP_SPEED_SCALE,
+    )
+
 _LOGGER = logging.getLogger(__name__)
 
-# Detection interval in seconds
-DETECTION_INTERVAL_S = 3.0
+DETECTION_INTERVAL_S = AUTO_MODE_DETECTION_INTERVAL_S
 
 
-def _within(value: float, target: float, tolerance: float) -> bool:
-    return abs(value - target) <= tolerance
-
-
-def detect_mode(p31: float, p41: float, actual_dp: float, dp_setpoint: float) -> str | None:
+def detect_mode(
+    manual_override: bool,
+    p31_speed: float,
+    p41_speed: float,
+    dp_setpoint: float,
+) -> str | None:
     """
-    Pure function: given the four measured values, return the matching TEST_MODE
-    name string (matching monitor_config.TEST_MODES exactly), or None if no match.
+    Return the matching TEST_MODE name for scaled Modbus values, or None if idle.
     """
-    # 1. P31 pump-only test
-    if p31 > 70 and _within(p41, 0, 2):
-        return "P31 100% Pump Test"
+    if manual_override:
+        if p31_speed == 100 and p41_speed == 0:
+            return "P31 100% Pump Test"
+        if p41_speed == 100 and p31_speed == 0:
+            return "P41 100% Pump Test"
 
-    # 2. P41 pump-only test
-    if _within(p31, 0, 2) and p41 > 70:
-        return "P41 100% Pump Test"
-
-    # Check DP tests before Combine 75% because the 25DP speed range overlaps it.
-    for sp_target, p_target, name in (
-        (15, 58, "15DP Test"),
-        (20, 68, "20DP Test"),
-        (25, 76, "25DP Test"),
-        (30, 83, "30DP Test"),
-    ):
-        if (
-            _within(p31, p_target, 2)
-            and _within(p41, p_target, 2)
-            and _within(dp_setpoint, sp_target, 0.5)
-            and actual_dp > (dp_setpoint - 1)
+        for target, name in (
+            (25, "Combine 25% Pump Test"),
+            (50, "Combine 50% Pump Test"),
+            (75, "Combine 75% Pump Test"),
+            (100, "Combine 100% Pump Test"),
         ):
-            return name
-
-    # 3–6. Combine pump tests (both speeds equal within ±1)
-    for target, name in (
-        (25, "Combine 25% Pump Test"),
-        (50, "Combine 50% Pump Test"),
-        (75, "Combine 75% Pump Test"),
-        (90, "Combine 100% Pump Test"),
-    ):
-        if _within(p31, target, 1) and _within(p41, target, 1):
-            return name
+            if p31_speed == target and p41_speed == target:
+                return name
+    else:
+        for target, name in (
+            (15, "15DP Test"),
+            (20, "20DP Test"),
+            (25, "25DP Test"),
+            (30, "30DP Test"),
+        ):
+            if dp_setpoint == target:
+                return name
 
     return None
 
@@ -90,7 +87,8 @@ class AutoModeDetector:
     Parameters
     ----------
     modbus_core :
-        A :class:`ModbusCore` instance (must already support ``read_registers_raw``).
+        A :class:`ModbusCore` instance supporting ``read_registers_raw`` and
+        ``read_coils_raw``.
     on_mode_detected :
         Callback invoked on the *calling* thread's scheduler via ``root.after(0, ...)``.
         Signature: ``(mode_name: str | None) -> None``.
@@ -142,23 +140,42 @@ class AutoModeDetector:
 
     def _detect_once(self) -> None:
         try:
-            # Read P31 (39), P41 (40) in one batch, then DP registers separately
-            # because registers 35 and 201 are not contiguous with 39–40.
-            speed_regs = self._modbus.read_registers_raw(39, 2)
-            dp_actual_raw = self._modbus.read_registers_raw(35, 1)
-            dp_setpoint_raw = self._modbus.read_registers_raw(201, 1)
+            p31_raw = self._modbus.read_registers_raw(AUTO_MODE_P31_REGISTER, 1)
+            p41_raw = self._modbus.read_registers_raw(AUTO_MODE_P41_REGISTER, 1)
+            manual_override_raw = self._modbus.read_coils_raw(
+                AUTO_MODE_MANUAL_OVERRIDE_COIL, 1
+            )
+            dp_setpoint_raw = self._modbus.read_registers_raw(
+                AUTO_MODE_DP_SETPOINT_REGISTER, 1
+            )
         except Exception:
-            _LOGGER.exception("Auto-mode detection failed while reading Modbus registers")
+            _LOGGER.exception("Auto-mode detection failed while reading Modbus")
             mode = None
         else:
-            if speed_regs is None or dp_actual_raw is None or dp_setpoint_raw is None:
+            if (
+                p31_raw is None
+                or p41_raw is None
+                or manual_override_raw is None
+                or dp_setpoint_raw is None
+            ):
                 mode = None
             else:
-                p31 = self._modbus.signed(speed_regs[0]) / _SPEED_SCALE
-                p41 = self._modbus.signed(speed_regs[1]) / _SPEED_SCALE
-                actual_dp = self._modbus.signed(dp_actual_raw[0]) / _DP_SCALE
-                dp_setpoint = self._modbus.signed(dp_setpoint_raw[0]) / _DP_SCALE
-                mode = detect_mode(p31, p41, actual_dp, dp_setpoint)
+                p31_speed = (
+                    self._modbus.signed(p31_raw[0]) / AUTO_MODE_PUMP_SPEED_SCALE
+                )
+                p41_speed = (
+                    self._modbus.signed(p41_raw[0]) / AUTO_MODE_PUMP_SPEED_SCALE
+                )
+                dp_setpoint = (
+                    self._modbus.signed(dp_setpoint_raw[0])
+                    / AUTO_MODE_DP_SETPOINT_SCALE
+                )
+                mode = detect_mode(
+                    manual_override_raw[0],
+                    p31_speed,
+                    p41_speed,
+                    dp_setpoint,
+                )
         if mode != self._last_mode:
             self._last_mode = mode
             # Schedule callback safely on Tk main thread

@@ -236,7 +236,7 @@ class AdvancedSettingsWindow:
         muted_fg = "#888888" if self.is_dark else "#555555"
         ttk.Label(
             scan_frame,
-            text="Sets the flow and pump polling interval. Auto-mode detection checks every 3 seconds.",
+            text="Sets the flow and pump polling interval. Auto-mode detection checks every 2 seconds.",
             font=("Segoe UI", 8),
             foreground=muted_fg,
             wraplength=440,

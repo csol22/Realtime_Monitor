@@ -143,6 +143,29 @@ class ModbusCore:
 				return None
 			return self._read_registers(start_address, count)
 
+	def read_coils_raw(self, start_address: int, count: int) -> list[bool] | None:
+		"""Read *count* coils starting at *start_address*.
+
+		Returns a list of coil states, or ``None`` if not connected.
+		Raises on Modbus errors so callers can decide how to handle them.
+		"""
+		with self._client_lock:
+			if self._client is None:
+				return None
+
+			try:
+				response = self._client.read_coils( # type: ignore
+					address=start_address, count=count, slave=self.slave_id # type: ignore
+				)
+			except TypeError:
+				response = self._client.read_coils( # type: ignore
+					address=start_address, count=count, device_id=self.slave_id
+				)
+
+			if response.isError() or not response.bits or len(response.bits) < count:
+				raise RuntimeError(f"Read error at coil {start_address}")
+			return [bool(value) for value in response.bits[:count]]
+
 	@staticmethod
 	def signed(raw_value: int) -> int:
 		"""Convert a 16-bit unsigned register value to a signed integer."""

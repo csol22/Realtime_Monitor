@@ -2,9 +2,23 @@ import math
 import time
 
 if __package__:
-	from .monitor_config import FLOW_SCALE, SPEED_SCALE
+	from .monitor_config import (
+		AUTO_MODE_DP_SETPOINT_REGISTER,
+		AUTO_MODE_P31_REGISTER,
+		AUTO_MODE_PUMP_SPEED_SCALE,
+		AUTO_MODE_P41_REGISTER,
+		FLOW_SCALE,
+		SPEED_SCALE,
+	)
 else:
-	from monitor_config import FLOW_SCALE, SPEED_SCALE
+	from monitor_config import (
+		AUTO_MODE_DP_SETPOINT_REGISTER,
+		AUTO_MODE_P31_REGISTER,
+		AUTO_MODE_PUMP_SPEED_SCALE,
+		AUTO_MODE_P41_REGISTER,
+		FLOW_SCALE,
+		SPEED_SCALE,
+	)
 
 
 class PreviewResponse:
@@ -13,6 +27,14 @@ class PreviewResponse:
 			self.registers = value
 		else:
 			self.registers = [value]
+
+	def isError(self) -> bool:
+		return False
+
+
+class PreviewCoilResponse:
+	def __init__(self, value: bool) -> None:
+		self.bits = [value]
 
 	def isError(self) -> bool:
 		return False
@@ -30,12 +52,17 @@ class PreviewClient:
 			38: round((115 + 40 * math.sin(phase + 1)) * FLOW_SCALE),
 			39: round(58 * SPEED_SCALE),
 			40: round(58 * SPEED_SCALE),
-			# Auto-mode detection registers (simulate ~15DP test scenario)
+			AUTO_MODE_P31_REGISTER: round(58 * AUTO_MODE_PUMP_SPEED_SCALE),
+			AUTO_MODE_P41_REGISTER: round(58 * AUTO_MODE_PUMP_SPEED_SCALE),
 			35: round(14.5 * 10),   # Actual Secondary DP ~14.5 psi
-			201: round(15.0 * 10),  # Secondary DP Setpoint = 15 psi
+			AUTO_MODE_DP_SETPOINT_REGISTER: round(15.0 * 10),
 		}
 		result = [values.get(address + i, 0) for i in range(count)]
 		return PreviewResponse(result)
+
+	def read_coils(self, address: int, count: int = 1, **_kwargs) -> PreviewCoilResponse:
+		del address, count, _kwargs
+		return PreviewCoilResponse(False)
 
 	def close(self) -> None:
 		pass
